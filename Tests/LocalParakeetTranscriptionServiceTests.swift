@@ -1,12 +1,45 @@
 import Foundation
 
 enum LocalParakeetTranscriptionServiceTests {
-    static func run() {
+    static func run() async {
         usesPredictableCPUCompute()
+        await cancellationBeforeLaunchDoesNotRunHelper()
         parsesAndTrimsDedicatedTranscriptField()
         collapsesDecoderPunctuationRepetition()
         removesUnexpectedScriptArtifacts()
         rejectsResponsesWithoutTranscriptText()
+    }
+
+    private static func cancellationBeforeLaunchDoesNotRunHelper() async {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("freeflow-local-cancel-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = root.appendingPathComponent("fake-helper")
+        let marker = URL(fileURLWithPath: helper.path + ".ran")
+        let modelDirectory = root.appendingPathComponent("models", isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
+            try Data("#!/bin/sh\n/usr/bin/touch \"$0.ran\"\n".utf8).write(to: helper)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+            let service = try LocalParakeetTranscriptionService(
+                modelDirectory: modelDirectory,
+                executableURL: helper
+            )
+            let task = Task { try await service.prewarm() }
+            task.cancel()
+            do {
+                try await task.value
+                TestSupport.expect(false, "Cancelled prewarm unexpectedly succeeded")
+            } catch is CancellationError {
+                TestSupport.expect(true, "Prewarm cancellation propagated")
+            }
+            TestSupport.expect(
+                !FileManager.default.fileExists(atPath: marker.path),
+                "A helper launched after prewarm was already cancelled"
+            )
+        } catch {
+            TestSupport.expect(false, "Cancellation regression test failed: \(error)")
+        }
     }
 
     private static func usesPredictableCPUCompute() {

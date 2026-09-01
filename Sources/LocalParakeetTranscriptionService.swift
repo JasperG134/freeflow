@@ -180,13 +180,22 @@ final class LocalParakeetTranscriptionService {
     }
 
     private func run(_ process: Process) async throws {
+        try Task.checkCancellation()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 process.terminationHandler = { _ in
                     continuation.resume()
                 }
                 do {
+                    guard !Task.isCancelled else {
+                        process.terminationHandler = nil
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
                     try process.run()
+                    if Task.isCancelled, process.isRunning {
+                        process.terminate()
+                    }
                 } catch {
                     process.terminationHandler = nil
                     continuation.resume(throwing: error)
