@@ -2,10 +2,18 @@ import Foundation
 
 enum LocalParakeetTranscriptionServiceTests {
     static func run() {
+        usesPredictableCPUCompute()
         parsesAndTrimsDedicatedTranscriptField()
         collapsesDecoderPunctuationRepetition()
         removesUnexpectedScriptArtifacts()
         rejectsResponsesWithoutTranscriptText()
+    }
+
+    private static func usesPredictableCPUCompute() {
+        TestSupport.expect(
+            LocalParakeetTranscriptionService.computeUnits == "cpu",
+            "Local transcription should avoid sporadic Neural Engine cold-start stalls"
+        )
     }
 
     private static func collapsesDecoderPunctuationRepetition() {

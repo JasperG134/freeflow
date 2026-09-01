@@ -251,7 +251,7 @@ final class LocalParakeetModelManager: ObservableObject {
                 arguments: [
                     "transcribe", preparationAudio.path,
                     "--models", store.modelDirectory.path,
-                    "--compute-units", "ane",
+                    "--compute-units", LocalParakeetTranscriptionService.computeUnits,
                     "--max-seconds", "0.1",
                 ],
                 monitorsDownload: false

@@ -6,6 +6,11 @@ import Foundation
 /// this Mac; the helper receives only a local file path and writes its result to
 /// a temporary file that is deleted immediately after parsing.
 final class LocalParakeetTranscriptionService {
+    // ANE model loading can sporadically stall for 30–45 seconds after idle.
+    // CPU-only remains much faster than real time on supported Macs, has a
+    // predictable cold start, and still releases all model memory after use.
+    static let computeUnits = "cpu"
+
     private let executableURL: URL
     private let modelDirectory: URL
 
@@ -53,7 +58,7 @@ final class LocalParakeetTranscriptionService {
             "transcribe",
             fileURL.path,
             "--models", modelDirectory.path,
-            "--compute-units", "ane",
+            "--compute-units", Self.computeUnits,
         ]
 
         // Diagnostics go to stderr; stdout contains only the transcript. Keep
