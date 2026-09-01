@@ -135,11 +135,16 @@ struct LocalParakeetModelStore {
 
     func removeModel() throws {
         let fileManager = FileManager.default
-        let compiledDirectories = installationMarker?.compiledCacheDirectories ?? []
+        let compiledDirectories = Set(installationMarker?.compiledCacheDirectories ?? [])
         if fileManager.fileExists(atPath: modelDirectory.path) {
             try fileManager.removeItem(at: modelDirectory)
         }
-        for name in compiledDirectories where Self.isSafeCompiledCacheName(name) {
+        try removeCompiledCacheDirectories(compiledDirectories)
+    }
+
+    func removeCompiledCacheDirectories(_ names: Set<String>) throws {
+        let fileManager = FileManager.default
+        for name in names where Self.isSafeCompiledCacheName(name) {
             let url = compiledCacheRoot.appendingPathComponent(name, isDirectory: true)
             guard fileManager.fileExists(atPath: url.path) else { continue }
             try fileManager.removeItem(at: url)
@@ -166,7 +171,55 @@ struct LocalParakeetModelStore {
             return marker
         }
         guard String(data: data, encoding: .utf8) == Self.legacyMarkerContents else { return nil }
-        return LocalParakeetInstallationMarker(version: 1, compiledCacheDirectories: [])
+        return LocalParakeetInstallationMarker(
+            version: 1,
+            compiledCacheDirectories: legacyCompiledCacheDirectoryNames().sorted()
+        )
+    }
+
+    func legacyCompiledCacheDirectoryNames() -> Set<String> {
+        let relativePackages = Set(assets.compactMap { asset -> String? in
+            let components = asset.relativePath.split(separator: "/")
+            guard let index = components.firstIndex(where: { $0.hasSuffix(".mlpackage") }) else {
+                return nil
+            }
+            return components[...index].joined(separator: "/")
+        })
+        return Set(relativePackages.compactMap { relativePath in
+            Self.compiledCacheName(
+                for: modelDirectory.appendingPathComponent(relativePath, isDirectory: true)
+            )
+        })
+    }
+
+    // Mirrors the pinned helper's content-addressed ModelCache key so legacy
+    // FreeFlow markers can claim only caches compiled from their own packages.
+    private static func compiledCacheName(for source: URL) -> String? {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: source.path) else { return nil }
+        var hasher = SHA256()
+        hasher.update(data: Data(source.resolvingSymlinksInPath().path.utf8))
+        if let enumerator = fileManager.enumerator(
+            at: source,
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let url as URL in enumerator {
+                guard let values = try? url.resourceValues(
+                    forKeys: [.fileSizeKey, .contentModificationDateKey]
+                ) else { continue }
+                hasher.update(data: Data(url.lastPathComponent.utf8))
+                if let size = values.fileSize {
+                    Swift.withUnsafeBytes(of: Int64(size)) { hasher.update(data: Data($0)) }
+                }
+                if let modified = values.contentModificationDate {
+                    Swift.withUnsafeBytes(of: modified.timeIntervalSince1970) {
+                        hasher.update(data: Data($0))
+                    }
+                }
+            }
+        }
+        return hasher.finalize().prefix(12).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func isSafeCompiledCacheName(_ name: String) -> Bool {
@@ -296,11 +349,23 @@ final class LocalParakeetModelManager: ObservableObject {
                 modelDirectory: store.modelDirectory,
                 executableURL: executableURL
             )
-            try await transcriptionService.prewarm()
-            try store.markInstalled(
-                compiledCacheDirectories: store.compiledCacheDirectoryNames()
-                    .subtracting(compiledCacheDirectoriesBeforePreparation)
-            )
+            do {
+                try await transcriptionService.prewarm()
+            } catch {
+                try? store.removeCompiledCacheDirectories(
+                    store.compiledCacheDirectoryNames()
+                        .subtracting(compiledCacheDirectoriesBeforePreparation)
+                )
+                throw error
+            }
+            let preparedDirectories = store.compiledCacheDirectoryNames()
+                .subtracting(compiledCacheDirectoriesBeforePreparation)
+            do {
+                try store.markInstalled(compiledCacheDirectories: preparedDirectories)
+            } catch {
+                try? store.removeCompiledCacheDirectories(preparedDirectories)
+                throw error
+            }
             state = .ready(store.installedByteCount())
             return true
         } catch is CancellationError {

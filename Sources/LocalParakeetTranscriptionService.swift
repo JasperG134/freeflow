@@ -13,8 +13,13 @@ final class LocalParakeetTranscriptionService {
 
     private let executableURL: URL
     private let modelDirectory: URL
+    private let beforeProcessLaunch: (@Sendable () async -> Void)?
 
-    init(modelDirectory: URL, executableURL: URL? = nil) throws {
+    init(
+        modelDirectory: URL,
+        executableURL: URL? = nil,
+        beforeProcessLaunch: (@Sendable () async -> Void)? = nil
+    ) throws {
         let resolvedURL: URL
         if let executableURL {
             resolvedURL = executableURL
@@ -34,6 +39,7 @@ final class LocalParakeetTranscriptionService {
         }
         self.executableURL = resolvedURL
         self.modelDirectory = modelDirectory
+        self.beforeProcessLaunch = beforeProcessLaunch
     }
 
     func transcribe(fileURL: URL) async throws -> String {
@@ -180,6 +186,7 @@ final class LocalParakeetTranscriptionService {
     }
 
     private func run(_ process: Process) async throws {
+        await beforeProcessLaunch?()
         try Task.checkCancellation()
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in

@@ -1069,6 +1069,10 @@ final class AppState: ObservableObject, @unchecked Sendable {
         LocalTranscriptionPolicy(isEnabled: localTranscriptionEnabled)
     }
 
+    var requiresScreenRecordingPermission: Bool {
+        localTranscriptionPolicy.allowsContextCapture
+    }
+
     private func persistShortcut(_ binding: ShortcutBinding, key: String) {
         let normalizedBinding = binding.normalizedForStorageMigration()
         guard let data = try? JSONEncoder().encode(normalizedBinding) else { return }
@@ -1335,16 +1339,21 @@ final class AppState: ObservableObject, @unchecked Sendable {
         accessibilityTimer?.invalidate()
         accessibilityTimer = nil
         hasAccessibility = AXIsProcessTrusted()
-        hasScreenRecordingPermission = hasScreenCapturePermission()
-        if hasAccessibility && hasScreenRecordingPermission {
+        if requiresScreenRecordingPermission {
+            hasScreenRecordingPermission = hasScreenCapturePermission()
+        }
+        if hasAccessibility && (!requiresScreenRecordingPermission || hasScreenRecordingPermission) {
             return
         }
         accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.hasAccessibility = AXIsProcessTrusted()
-                self.hasScreenRecordingPermission = self.hasScreenCapturePermission()
-                if self.hasAccessibility && self.hasScreenRecordingPermission {
+                if self.requiresScreenRecordingPermission {
+                    self.hasScreenRecordingPermission = self.hasScreenCapturePermission()
+                }
+                if self.hasAccessibility
+                    && (!self.requiresScreenRecordingPermission || self.hasScreenRecordingPermission) {
                     self.accessibilityTimer?.invalidate()
                     self.accessibilityTimer = nil
                 }
@@ -3168,6 +3177,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     }
 
     private func handleScreenshotCaptureIssue(_ message: String?) {
+        guard localTranscriptionPolicy.allowsContextCapture else { return }
         guard let message, !message.isEmpty else {
             hasShownScreenshotPermissionAlert = false
             return

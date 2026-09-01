@@ -11,10 +11,15 @@ APP_EXECUTABLE = $(MACOS_DIR)/$(APP_NAME)
 APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
 LOCAL_ASR_DIR = $(BUILD_DIR)/local-asr
 LOCAL_ASR_HELPER = $(LOCAL_ASR_DIR)/freeflow-local-asr
+LOCAL_ASR_LICENSES = \
+	$(LOCAL_ASR_DIR)/licenses/parakeet-coreml-swift-APACHE-2.0.txt \
+	$(LOCAL_ASR_DIR)/licenses/swift-argument-parser-APACHE-2.0.txt
+LOCAL_ASR_BUILD_STAMP = $(LOCAL_ASR_DIR)/.built
+LOCAL_ASR_CONFIG_STAMP = $(BUILD_DIR)/.include-local-asr
 INCLUDE_LOCAL_ASR ?= 0
 
 ifeq ($(INCLUDE_LOCAL_ASR),1)
-LOCAL_ASR_PREREQUISITES = $(LOCAL_ASR_HELPER) Resources/LocalASR-Third-Party-Notices.txt
+LOCAL_ASR_PREREQUISITES = $(LOCAL_ASR_BUILD_STAMP) Resources/LocalASR-Third-Party-Notices.txt
 endif
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
@@ -50,16 +55,29 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run icon local-asr dmg codesign-dmg notarize test typecheck validate
+.PHONY: all check clean run icon local-asr dmg codesign-dmg notarize test typecheck validate FORCE
 
 all: $(APP_EXECUTABLE_TARGET)
 
-$(LOCAL_ASR_HELPER): scripts/build-local-asr-helper.sh Resources/LocalASR-Package.resolved
-	@./scripts/build-local-asr-helper.sh "$(LOCAL_ASR_DIR)"
+FORCE:
 
-local-asr: $(LOCAL_ASR_HELPER)
+$(LOCAL_ASR_CONFIG_STAMP): FORCE
+	@mkdir -p "$(BUILD_DIR)"
+	@printf '%s\n' '$(INCLUDE_LOCAL_ASR)' | cmp -s - "$@" || printf '%s\n' '$(INCLUDE_LOCAL_ASR)' > "$@"
 
-$(APP_EXECUTABLE_TARGET): $(SOURCES) Info.plist $(ICON_ICNS) $(LOCAL_ASR_PREREQUISITES)
+$(LOCAL_ASR_BUILD_STAMP): FORCE scripts/build-local-asr-helper.sh Resources/LocalASR-Package.resolved
+	@if [ ! -x "$(LOCAL_ASR_HELPER)" ] \
+		|| [ ! -f "$(word 1,$(LOCAL_ASR_LICENSES))" ] \
+		|| [ ! -f "$(word 2,$(LOCAL_ASR_LICENSES))" ] \
+		|| [ ! -f "$@" ] \
+		|| [ scripts/build-local-asr-helper.sh -nt "$@" ] \
+		|| [ Resources/LocalASR-Package.resolved -nt "$@" ]; then \
+		./scripts/build-local-asr-helper.sh "$(LOCAL_ASR_DIR)" && touch "$@"; \
+	fi
+
+local-asr: $(LOCAL_ASR_BUILD_STAMP)
+
+$(APP_EXECUTABLE_TARGET): $(SOURCES) Info.plist $(ICON_ICNS) $(LOCAL_ASR_CONFIG_STAMP) $(LOCAL_ASR_PREREQUISITES)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
 	swiftc \

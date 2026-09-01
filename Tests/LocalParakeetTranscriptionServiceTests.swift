@@ -1,5 +1,28 @@
 import Foundation
 
+private actor ProcessLaunchGate {
+    private var reached = false
+    private var reachedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func pause() async {
+        reached = true
+        reachedContinuation?.resume()
+        reachedContinuation = nil
+        await withCheckedContinuation { releaseContinuation = $0 }
+    }
+
+    func waitUntilReached() async {
+        guard !reached else { return }
+        await withCheckedContinuation { reachedContinuation = $0 }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+}
+
 enum LocalParakeetTranscriptionServiceTests {
     static func run() async {
         usesPredictableCPUCompute()
@@ -21,12 +44,18 @@ enum LocalParakeetTranscriptionServiceTests {
             try FileManager.default.createDirectory(at: modelDirectory, withIntermediateDirectories: true)
             try Data("#!/bin/sh\n/usr/bin/touch \"$0.ran\"\n".utf8).write(to: helper)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: helper.path)
+            let launchGate = ProcessLaunchGate()
             let service = try LocalParakeetTranscriptionService(
                 modelDirectory: modelDirectory,
-                executableURL: helper
+                executableURL: helper,
+                beforeProcessLaunch: {
+                    await launchGate.pause()
+                }
             )
-            let task = Task { try await service.prewarm() }
+            let task = Task.detached { try await service.prewarm() }
+            await launchGate.waitUntilReached()
             task.cancel()
+            await launchGate.release()
             do {
                 try await task.value
                 TestSupport.expect(false, "Cancelled prewarm unexpectedly succeeded")

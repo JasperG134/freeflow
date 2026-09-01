@@ -3,6 +3,7 @@ import Foundation
 enum LocalParakeetModelStoreTests {
     static func run() {
         validatesMarksAndRemovesOnlyTheModelCache()
+        legacyMarkerRemovesOnlyMatchingCompiledCache()
         rejectsModifiedModelAssets()
     }
 
@@ -54,12 +55,45 @@ enum LocalParakeetModelStoreTests {
         }
     }
 
-    private static func withStore(_ body: (LocalParakeetModelStore, URL) throws -> Void) {
+    private static func legacyMarkerRemovesOnlyMatchingCompiledCache() {
+        withStore(relativePath: "encoder.mlpackage/Data/model.bin") { store, assetURL in
+            try Data("hello".utf8).write(to: assetURL)
+            let names = store.legacyCompiledCacheDirectoryNames()
+            TestSupport.expectEqual(names.count, 1)
+            guard let ownedName = names.first else { return }
+            let compiledRoot = store.cacheRoot.appendingPathComponent("mlmodelc", isDirectory: true)
+            let owned = compiledRoot.appendingPathComponent(ownedName, isDirectory: true)
+            let unrelated = compiledRoot.appendingPathComponent(
+                "89abcdef0123456701234567",
+                isDirectory: true
+            )
+            try FileManager.default.createDirectory(at: owned, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: unrelated, withIntermediateDirectories: true)
+            try Data(LocalParakeetModelStore.legacyMarkerContents.utf8).write(
+                to: store.modelDirectory.appendingPathComponent(".freeflow-verified")
+            )
+
+            try store.removeModel()
+            TestSupport.expect(
+                !FileManager.default.fileExists(atPath: owned.path),
+                "Legacy removal left the matching compiled cache"
+            )
+            TestSupport.expect(
+                FileManager.default.fileExists(atPath: unrelated.path),
+                "Legacy removal deleted an unrelated compiled cache"
+            )
+        }
+    }
+
+    private static func withStore(
+        relativePath: String = "test/asset.bin",
+        _ body: (LocalParakeetModelStore, URL) throws -> Void
+    ) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("freeflow-local-model-tests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let asset = LocalParakeetModelAsset(
-            relativePath: "test/asset.bin",
+            relativePath: relativePath,
             byteCount: 5,
             sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
         )
