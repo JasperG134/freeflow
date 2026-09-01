@@ -9,6 +9,8 @@ empty :=
 space := $(empty) $(empty)
 APP_EXECUTABLE = $(MACOS_DIR)/$(APP_NAME)
 APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
+LOCAL_ASR_DIR = $(BUILD_DIR)/local-asr
+LOCAL_ASR_HELPER = $(LOCAL_ASR_DIR)/freeflow-local-asr
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
 TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
@@ -17,6 +19,9 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/AppName.swift \
 	Sources/LLMAPITransport.swift \
 	Sources/LLMCooldownManager.swift \
+	Sources/LocalParakeetModelManager.swift \
+	Sources/LocalParakeetTranscriptionService.swift \
+	Sources/LocalTranscriptionPolicy.swift \
 	Sources/ModelConfiguration.swift \
 	Sources/TranscriptTextCore.swift \
 	Sources/UpdateManager.swift \
@@ -24,7 +29,7 @@ TEST_PRODUCTION_SOURCES = \
 	Sources/ShortcutCore/ShortcutMatcher.swift \
 	Sources/ShortcutCore/ShortcutModels.swift
 TEST_SOURCES = $(shell find Tests -name '*.swift' -type f | LC_ALL=C sort)
-SHELL_SCRIPTS = $(shell find .github/scripts .agents/skills -name '*.sh' -type f | LC_ALL=C sort)
+SHELL_SCRIPTS = $(shell find .github/scripts .agents/skills scripts -name '*.sh' -type f | LC_ALL=C sort)
 YAML_FILES = $(shell find .github -type f \( -name '*.yml' -o -name '*.yaml' \) | LC_ALL=C sort)
 RESOURCES = $(CONTENTS)/Resources
 ARCH ?= $(shell uname -m)
@@ -44,7 +49,10 @@ endif
 
 all: $(APP_EXECUTABLE_TARGET)
 
-$(APP_EXECUTABLE_TARGET): $(SOURCES) Info.plist $(ICON_ICNS)
+$(LOCAL_ASR_HELPER): scripts/build-local-asr-helper.sh
+	@./scripts/build-local-asr-helper.sh "$(LOCAL_ASR_DIR)"
+
+$(APP_EXECUTABLE_TARGET): $(SOURCES) Info.plist $(ICON_ICNS) $(LOCAL_ASR_HELPER)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
 	swiftc \
@@ -80,6 +88,11 @@ endif
 	@plutil -replace NSMicrophoneUsageDescription -string "$(APP_NAME) needs microphone access to transcribe your speech." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSSpeechRecognitionUsageDescription -string "$(APP_NAME) needs speech recognition to convert your voice to text." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSAccessibilityUsageDescription -string "$(APP_NAME) needs accessibility access to detect the text cursor position and paste transcribed text." "$(CONTENTS)/Info.plist"
+	@cp "$(LOCAL_ASR_HELPER)" "$(MACOS_DIR)/freeflow-local-asr"
+	@mkdir -p "$(RESOURCES)/ThirdPartyLicenses"
+	@cp -f "$(LOCAL_ASR_DIR)/licenses/"* "$(RESOURCES)/ThirdPartyLicenses/"
+	@cp -f Resources/LocalASR-Third-Party-Notices.txt "$(RESOURCES)/ThirdPartyLicenses/"
+	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$(MACOS_DIR)/freeflow-local-asr"
 	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
 
