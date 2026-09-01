@@ -1,7 +1,7 @@
 import Foundation
 
 /// Runs the bundled Parakeet Core ML helper as an isolated, one-shot process.
-/// The model is loaded only while a transcription is running, keeping idle RAM
+/// The model is loaded only while prewarming or transcribing, keeping idle RAM
 /// use close to the stock FreeFlow app. All audio and transcript data stay on
 /// this Mac; the helper receives only a local file path and writes its result to
 /// a temporary file that is deleted immediately after parsing.
@@ -52,14 +52,7 @@ final class LocalParakeetTranscriptionService {
         let outputHandle = try FileHandle(forWritingTo: outputURL)
         defer { try? outputHandle.close() }
 
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = [
-            "transcribe",
-            fileURL.path,
-            "--models", modelDirectory.path,
-            "--compute-units", Self.computeUnits,
-        ]
+        let process = makeProcess(fileURL: fileURL)
 
         // Diagnostics go to stderr; stdout contains only the transcript. Keep
         // both out of persistent application logs and delete the private output
@@ -75,6 +68,24 @@ final class LocalParakeetTranscriptionService {
         try outputHandle.synchronize()
         let data = try Data(contentsOf: outputURL)
         return try Self.parseTranscript(from: data)
+    }
+
+    /// Loads and exercises the same model path before recording stops, using
+    /// generated silence only. The one-shot helper exits immediately, so this
+    /// hides Core ML's cold start behind the user's recording without keeping
+    /// model RAM resident while idle.
+    func prewarm() async throws {
+        let audioURL = try makePreparationAudio()
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        // Exercise the first prediction too: model load alone does not warm
+        // Core ML's execution path and leaves several seconds after recording.
+        let process = makeProcess(fileURL: audioURL, maxSeconds: 0.1)
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try await run(process)
+        guard process.terminationReason == .exit, process.terminationStatus == 0 else {
+            throw LocalParakeetError.helperFailed(process.terminationStatus)
+        }
     }
 
     static func parseTranscript(from data: Data) throws -> String {
@@ -132,6 +143,42 @@ final class LocalParakeetTranscriptionService {
         return String(characters)
     }
 
+    private func makeProcess(fileURL: URL, maxSeconds: Double? = nil) -> Process {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = [
+            "transcribe", fileURL.path,
+            "--models", modelDirectory.path,
+            "--compute-units", Self.computeUnits,
+        ]
+        if let maxSeconds {
+            process.arguments? += ["--max-seconds", String(maxSeconds)]
+        }
+        return process
+    }
+
+    private func makePreparationAudio() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("freeflow-local-model-prewarm-\(UUID().uuidString).wav")
+        let sampleCount: UInt32 = 1_600
+        let dataByteCount = sampleCount * 2
+        var data = Data("RIFF".utf8)
+        data.appendLittleEndian(36 + dataByteCount)
+        data.append(Data("WAVEfmt ".utf8))
+        data.appendLittleEndian(UInt32(16))
+        data.appendLittleEndian(UInt16(1))
+        data.appendLittleEndian(UInt16(1))
+        data.appendLittleEndian(UInt32(16_000))
+        data.appendLittleEndian(UInt32(32_000))
+        data.appendLittleEndian(UInt16(2))
+        data.appendLittleEndian(UInt16(16))
+        data.append(Data("data".utf8))
+        data.appendLittleEndian(dataByteCount)
+        data.append(Data(count: Int(dataByteCount)))
+        try data.write(to: url, options: .atomic)
+        return url
+    }
+
     private func run(_ process: Process) async throws {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -151,6 +198,13 @@ final class LocalParakeetTranscriptionService {
             }
         }
         try Task.checkCancellation()
+    }
+}
+
+private extension Data {
+    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
+        var littleEndian = value.littleEndian
+        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
     }
 }
 

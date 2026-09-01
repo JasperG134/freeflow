@@ -88,7 +88,8 @@ On Apple silicon Macs running macOS 15 or newer, enable **On-Device
 Transcription** in General Settings. FreeFlow downloads and verifies the
 approximately 459 MiB Parakeet TDT 0.6B v3 Core ML model, shows setup progress,
 and prepares it before the first dictation. The same Settings card can remove
-the model and its compiled cache.
+the model and its compiled cache. When a local recording starts, FreeFlow
+warms Core ML with generated silence so cold-start time overlaps the dictation.
 
 While on-device transcription is enabled, dictated audio and text do not go to
 a provider. Screenshot context, realtime streaming, translation, Edit Mode,

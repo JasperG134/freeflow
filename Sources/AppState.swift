@@ -607,6 +607,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
     private var debugOverlayTimer: Timer?
     private var recordingInitializationTimer: DispatchSourceTimer?
     private var transcriptionTask: Task<Void, Never>?
+    private var localTranscriptionWarmupTask: Task<Void, Never>?
     private var transcribingAudioFileName: String?
     private var contextService: AppContextService
     private var contextCaptureTask: Task<AppContext?, Never>?
@@ -1834,6 +1835,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         statusText = "Cancelled"
         overlayManager.dismiss()
         tearDownRealtimeService()
+        cancelLocalTranscriptionWarmup()
         audioRecorder.cancelRecording()
         restoreAudioInterruptionIfNeeded()
         endCriticalDictationActivity()
@@ -1848,6 +1850,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
 
         transcriptionTask?.cancel()
         transcriptionTask = nil
+        cancelLocalTranscriptionWarmup()
         contextCaptureTask?.cancel()
         contextCaptureTask = nil
         capturedContext = nil
@@ -2212,6 +2215,29 @@ final class AppState: ObservableObject, @unchecked Sendable {
         automaticTerminationDisabled = false
     }
 
+    private func startLocalTranscriptionWarmupIfNeeded() {
+        guard localTranscriptionPolicy.isEnabled,
+              localParakeetModelManager.store.isInstalled,
+              localTranscriptionWarmupTask == nil,
+              let service = try? LocalParakeetTranscriptionService(
+                  modelDirectory: localParakeetModelManager.store.modelDirectory
+              ) else { return }
+        localTranscriptionWarmupTask = Task(priority: .userInitiated) {
+            try? await service.prewarm()
+        }
+    }
+
+    private func finishLocalTranscriptionWarmupIfNeeded() async {
+        guard let task = localTranscriptionWarmupTask else { return }
+        await task.value
+        localTranscriptionWarmupTask = nil
+    }
+
+    private func cancelLocalTranscriptionWarmup() {
+        localTranscriptionWarmupTask?.cancel()
+        localTranscriptionWarmupTask = nil
+    }
+
     private func beginRecording(triggerMode: RecordingTriggerMode) {
         os_log(.info, log: recordingLog, "beginRecording() entered")
         beginCriticalDictationActivity()
@@ -2221,6 +2247,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         isRecording = true
         statusText = "Starting..."
         hasShownScreenshotPermissionAlert = false
+        startLocalTranscriptionWarmupIfNeeded()
 
         // Show initializing dots only if engine takes longer than 0.2s to start
         var overlayShown = false
@@ -2310,6 +2337,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         contextCaptureTask = nil
         capturedContext = nil
         tearDownRealtimeService()
+        cancelLocalTranscriptionWarmup()
         audioRecorder.cleanup()
         restoreAudioInterruptionIfNeeded()
         isRecording = false
@@ -2691,6 +2719,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
         audioRecorder.stopRecording { [weak self] fileURL in
             guard let self else { return }
             guard let fileURL else {
+                self.cancelLocalTranscriptionWarmup()
                 self.isTranscribing = false
                 self.audioRecorder.cleanup()
                 self.endCriticalDictationActivity()
@@ -2702,6 +2731,7 @@ final class AppState: ObservableObject, @unchecked Sendable {
             }
 
             guard self.isTranscribing else {
+                self.cancelLocalTranscriptionWarmup()
                 self.tearDownRealtimeService()
                 self.audioRecorder.cleanup()
                 self.refreshAvailableMicrophonesIfNeeded()
@@ -2742,6 +2772,8 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     activeRealtime?.cancel()
                 }
                 do {
+                    await self.finishLocalTranscriptionWarmupIfNeeded()
+                    try Task.checkCancellation()
                     let transcriptionService = try self.makeTranscriptionService()
                     async let transcript = Self.resolveRawTranscript(
                         realtimeService: activeRealtime,

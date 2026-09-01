@@ -244,18 +244,11 @@ final class LocalParakeetModelManager: ObservableObject {
                 try store.validateDownloadedModel()
             }.value
             state = .preparing
-            let preparationAudio = try makePreparationAudio()
-            defer { try? FileManager.default.removeItem(at: preparationAudio) }
-            try await run(
-                executableURL: executableURL,
-                arguments: [
-                    "transcribe", preparationAudio.path,
-                    "--models", store.modelDirectory.path,
-                    "--compute-units", LocalParakeetTranscriptionService.computeUnits,
-                    "--max-seconds", "0.1",
-                ],
-                monitorsDownload: false
+            let transcriptionService = try LocalParakeetTranscriptionService(
+                modelDirectory: store.modelDirectory,
+                executableURL: executableURL
             )
+            try await transcriptionService.prewarm()
             try store.markInstalled()
             state = .ready(store.installedByteCount())
             return true
@@ -305,28 +298,6 @@ final class LocalParakeetModelManager: ObservableObject {
             throw LocalParakeetModelError.helperFailed(process.terminationStatus)
         }
     }
-
-    private func makePreparationAudio() throws -> URL {
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("freeflow-local-model-setup-\(UUID().uuidString).wav")
-        let sampleCount: UInt32 = 1_600
-        let dataByteCount = sampleCount * 2
-        var data = Data("RIFF".utf8)
-        data.appendLittleEndian(36 + dataByteCount)
-        data.append(Data("WAVEfmt ".utf8))
-        data.appendLittleEndian(UInt32(16))
-        data.appendLittleEndian(UInt16(1))
-        data.appendLittleEndian(UInt16(1))
-        data.appendLittleEndian(UInt32(16_000))
-        data.appendLittleEndian(UInt32(32_000))
-        data.appendLittleEndian(UInt16(2))
-        data.appendLittleEndian(UInt16(16))
-        data.append(Data("data".utf8))
-        data.appendLittleEndian(dataByteCount)
-        data.append(Data(count: Int(dataByteCount)))
-        try data.write(to: url, options: .atomic)
-        return url
-    }
 }
 
 enum LocalParakeetModelError: LocalizedError {
@@ -340,12 +311,5 @@ enum LocalParakeetModelError: LocalizedError {
         case .integrityCheckFailed:
             return "The downloaded model failed its integrity check. Remove it and try again."
         }
-    }
-}
-
-private extension Data {
-    mutating func appendLittleEndian<T: FixedWidthInteger>(_ value: T) {
-        var littleEndian = value.littleEndian
-        Swift.withUnsafeBytes(of: &littleEndian) { append(contentsOf: $0) }
     }
 }
