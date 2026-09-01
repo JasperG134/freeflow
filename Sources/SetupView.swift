@@ -1117,6 +1117,9 @@ struct SetupView: View {
     private var canContinueFromCurrentStep: Bool {
         switch currentStep {
         case .welcome:
+            if case .unavailable = appState.localParakeetModelManager.state {
+                return !appState.localTranscriptionEnabled
+            }
             return !appState.localParakeetModelManager.state.isBusy
                 && (!appState.localTranscriptionEnabled
                     || appState.localParakeetModelManager.store.isInstalled)

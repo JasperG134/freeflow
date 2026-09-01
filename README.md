@@ -98,6 +98,10 @@ transcript is pasted directly, apart from a narrow deterministic repair for a
 known decoder punctuation artifact. Voice macros remain available because
 they are deterministic and local.
 
+Signed release workflows include the helper. Source builds remain
+network-independent by default; pass `INCLUDE_LOCAL_ASR=1` to `make` when you
+want to fetch, build, and bundle the pinned local helper.
+
 <details>
   <summary>Configure longer timeouts for local models</summary>
 

@@ -15,7 +15,8 @@ struct LocalTranscriptionSettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle("Use on-device transcription", isOn: localModeBinding)
                 .disabled(
-                    modelManager.state.isBusy || isUnavailable
+                    modelManager.state.isBusy
+                        || (isUnavailable && !appState.localTranscriptionEnabled)
                         || appState.isRecording || appState.isTranscribing
                 )
 

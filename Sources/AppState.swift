@@ -2043,7 +2043,6 @@ final class AppState: ObservableObject, @unchecked Sendable {
             // On-device mode deliberately ignores Edit Mode and selected text:
             // both would otherwise enter the cloud LLM/context path.
             currentSessionIntent = .dictation
-            hasScreenRecordingPermission = false
             overlayManager.setRecordingTriggerMode(triggerMode, animated: false)
             return true
         }
@@ -2916,7 +2915,9 @@ final class AppState: ObservableObject, @unchecked Sendable {
                     }
                 } catch {
                     let resolvedContext: AppContext
-                    if let sessionContext {
+                    if !self.localTranscriptionPolicy.allowsContextCapture {
+                        resolvedContext = self.onDeviceContext()
+                    } else if let sessionContext {
                         resolvedContext = sessionContext
                     } else if let inFlightContext = await inFlightContextTask?.value {
                         resolvedContext = inFlightContext

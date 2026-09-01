@@ -11,6 +11,11 @@ APP_EXECUTABLE = $(MACOS_DIR)/$(APP_NAME)
 APP_EXECUTABLE_TARGET := $(subst $(space),\ ,$(APP_EXECUTABLE))
 LOCAL_ASR_DIR = $(BUILD_DIR)/local-asr
 LOCAL_ASR_HELPER = $(LOCAL_ASR_DIR)/freeflow-local-asr
+INCLUDE_LOCAL_ASR ?= 0
+
+ifeq ($(INCLUDE_LOCAL_ASR),1)
+LOCAL_ASR_PREREQUISITES = $(LOCAL_ASR_HELPER) Resources/LocalASR-Third-Party-Notices.txt
+endif
 
 SOURCES = $(shell find Sources -name '*.swift' -type f | LC_ALL=C sort)
 TEST_RUNNER = $(BUILD_DIR)/FreeFlowTests
@@ -45,14 +50,16 @@ ICON_SOURCE = Resources/AppIcon-Source.png
 ICON_ICNS = Resources/AppIcon.icns
 endif
 
-.PHONY: all check clean run icon dmg codesign-dmg notarize test typecheck validate
+.PHONY: all check clean run icon local-asr dmg codesign-dmg notarize test typecheck validate
 
 all: $(APP_EXECUTABLE_TARGET)
 
-$(LOCAL_ASR_HELPER): scripts/build-local-asr-helper.sh
+$(LOCAL_ASR_HELPER): scripts/build-local-asr-helper.sh Resources/LocalASR-Package.resolved
 	@./scripts/build-local-asr-helper.sh "$(LOCAL_ASR_DIR)"
 
-$(APP_EXECUTABLE_TARGET): $(SOURCES) Info.plist $(ICON_ICNS) $(LOCAL_ASR_HELPER)
+local-asr: $(LOCAL_ASR_HELPER)
+
+$(APP_EXECUTABLE_TARGET): $(SOURCES) Info.plist $(ICON_ICNS) $(LOCAL_ASR_PREREQUISITES)
 	@mkdir -p "$(MACOS_DIR)" "$(RESOURCES)"
 ifeq ($(ARCH),universal)
 	swiftc \
@@ -88,11 +95,18 @@ endif
 	@plutil -replace NSMicrophoneUsageDescription -string "$(APP_NAME) needs microphone access to transcribe your speech." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSSpeechRecognitionUsageDescription -string "$(APP_NAME) needs speech recognition to convert your voice to text." "$(CONTENTS)/Info.plist"
 	@plutil -replace NSAccessibilityUsageDescription -string "$(APP_NAME) needs accessibility access to detect the text cursor position and paste transcribed text." "$(CONTENTS)/Info.plist"
+ifeq ($(INCLUDE_LOCAL_ASR),1)
 	@cp "$(LOCAL_ASR_HELPER)" "$(MACOS_DIR)/freeflow-local-asr"
 	@mkdir -p "$(RESOURCES)/ThirdPartyLicenses"
 	@cp -f "$(LOCAL_ASR_DIR)/licenses/"* "$(RESOURCES)/ThirdPartyLicenses/"
 	@cp -f Resources/LocalASR-Third-Party-Notices.txt "$(RESOURCES)/ThirdPartyLicenses/"
 	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" "$(MACOS_DIR)/freeflow-local-asr"
+else
+	@rm -f "$(MACOS_DIR)/freeflow-local-asr" \
+		"$(RESOURCES)/ThirdPartyLicenses/LocalASR-Third-Party-Notices.txt" \
+		"$(RESOURCES)/ThirdPartyLicenses/parakeet-coreml-swift-APACHE-2.0.txt" \
+		"$(RESOURCES)/ThirdPartyLicenses/swift-argument-parser-APACHE-2.0.txt"
+endif
 	@codesign --force --options runtime --sign "$(CODESIGN_IDENTITY)" --entitlements FreeFlow.entitlements "$(APP_BUNDLE)"
 	@echo "Built $(APP_BUNDLE)"
 

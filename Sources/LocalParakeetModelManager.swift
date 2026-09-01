@@ -10,7 +10,7 @@ struct LocalParakeetModelAsset: Equatable {
 
 struct LocalParakeetModelStore {
     static let repositoryDirectoryName = "mweinbach1_parakeet-tdt-0.6b-v3-coreml"
-    static let markerContents = "freeflow-parakeet-coreml-v1\n"
+    static let legacyMarkerContents = "freeflow-parakeet-coreml-v1\n"
     static let downloadByteCount: Int64 = 480_766_756
     static let pinnedAssets = [
         LocalParakeetModelAsset(
@@ -89,9 +89,12 @@ struct LocalParakeetModelStore {
         modelDirectory.appendingPathComponent(".freeflow-verified", isDirectory: false)
     }
 
+    private var compiledCacheRoot: URL {
+        cacheRoot.appendingPathComponent("mlmodelc", isDirectory: true)
+    }
+
     var isInstalled: Bool {
-        guard let marker = try? String(contentsOf: verifiedMarkerURL, encoding: .utf8),
-              marker == Self.markerContents else { return false }
+        guard installationMarker != nil else { return false }
         return assets.allSatisfy { asset in
             let url = modelDirectory.appendingPathComponent(asset.relativePath)
             let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
@@ -110,8 +113,12 @@ struct LocalParakeetModelStore {
         }
     }
 
-    func markInstalled() throws {
-        try Data(Self.markerContents.utf8).write(to: verifiedMarkerURL, options: .atomic)
+    func markInstalled(compiledCacheDirectories: Set<String> = []) throws {
+        let marker = LocalParakeetInstallationMarker(
+            version: 2,
+            compiledCacheDirectories: compiledCacheDirectories.sorted()
+        )
+        try JSONEncoder().encode(marker).write(to: verifiedMarkerURL, options: .atomic)
     }
 
     func downloadedByteCount() -> Int64 {
@@ -119,16 +126,51 @@ struct LocalParakeetModelStore {
     }
 
     func installedByteCount() -> Int64 {
-        byteCount(in: cacheRoot)
+        let compiledBytes = installationMarker?.compiledCacheDirectories.reduce(Int64(0)) { total, name in
+            guard Self.isSafeCompiledCacheName(name) else { return total }
+            return total + byteCount(in: compiledCacheRoot.appendingPathComponent(name, isDirectory: true))
+        } ?? 0
+        return byteCount(in: modelDirectory) + compiledBytes
     }
 
     func removeModel() throws {
         let fileManager = FileManager.default
-        let downloadedModels = cacheRoot.appendingPathComponent("hf-models", isDirectory: true)
-        let compiledModels = cacheRoot.appendingPathComponent("mlmodelc", isDirectory: true)
-        for url in [downloadedModels, compiledModels] where fileManager.fileExists(atPath: url.path) {
+        let compiledDirectories = installationMarker?.compiledCacheDirectories ?? []
+        if fileManager.fileExists(atPath: modelDirectory.path) {
+            try fileManager.removeItem(at: modelDirectory)
+        }
+        for name in compiledDirectories where Self.isSafeCompiledCacheName(name) {
+            let url = compiledCacheRoot.appendingPathComponent(name, isDirectory: true)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
             try fileManager.removeItem(at: url)
         }
+    }
+
+    func compiledCacheDirectoryNames() -> Set<String> {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: compiledCacheRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return Set(urls.compactMap { url in
+            guard Self.isSafeCompiledCacheName(url.lastPathComponent),
+                  (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { return nil }
+            return url.lastPathComponent
+        })
+    }
+
+    private var installationMarker: LocalParakeetInstallationMarker? {
+        guard let data = try? Data(contentsOf: verifiedMarkerURL) else { return nil }
+        if let marker = try? JSONDecoder().decode(LocalParakeetInstallationMarker.self, from: data),
+           marker.version == 2 {
+            return marker
+        }
+        guard String(data: data, encoding: .utf8) == Self.legacyMarkerContents else { return nil }
+        return LocalParakeetInstallationMarker(version: 1, compiledCacheDirectories: [])
+    }
+
+    private static func isSafeCompiledCacheName(_ name: String) -> Bool {
+        name.count == 24 && name.allSatisfy { $0.isHexDigit && !$0.isUppercase }
     }
 
     private func byteCount(in directory: URL) -> Int64 {
@@ -155,6 +197,11 @@ struct LocalParakeetModelStore {
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
+}
+
+private struct LocalParakeetInstallationMarker: Codable {
+    let version: Int
+    let compiledCacheDirectories: [String]
 }
 
 enum LocalParakeetModelState: Equatable {
@@ -244,12 +291,16 @@ final class LocalParakeetModelManager: ObservableObject {
                 try store.validateDownloadedModel()
             }.value
             state = .preparing
+            let compiledCacheDirectoriesBeforePreparation = store.compiledCacheDirectoryNames()
             let transcriptionService = try LocalParakeetTranscriptionService(
                 modelDirectory: store.modelDirectory,
                 executableURL: executableURL
             )
             try await transcriptionService.prewarm()
-            try store.markInstalled()
+            try store.markInstalled(
+                compiledCacheDirectories: store.compiledCacheDirectoryNames()
+                    .subtracting(compiledCacheDirectoriesBeforePreparation)
+            )
             state = .ready(store.installedByteCount())
             return true
         } catch is CancellationError {

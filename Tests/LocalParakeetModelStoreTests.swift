@@ -10,8 +10,18 @@ enum LocalParakeetModelStoreTests {
         withStore { store, assetURL in
             try Data("hello".utf8).write(to: assetURL)
             try store.validateDownloadedModel()
-            try store.markInstalled()
+            let compiledRoot = store.cacheRoot.appendingPathComponent("mlmodelc", isDirectory: true)
+            let ownedName = "0123456789abcdef01234567"
+            let unrelatedName = "89abcdef0123456701234567"
+            let owned = compiledRoot.appendingPathComponent(ownedName, isDirectory: true)
+            let unrelatedCompiled = compiledRoot.appendingPathComponent(unrelatedName, isDirectory: true)
+            try FileManager.default.createDirectory(at: owned, withIntermediateDirectories: true)
+            try FileManager.default.createDirectory(at: unrelatedCompiled, withIntermediateDirectories: true)
+            try Data("mine".utf8).write(to: owned.appendingPathComponent("model.bin"))
+            try Data("other".utf8).write(to: unrelatedCompiled.appendingPathComponent("model.bin"))
+            try store.markInstalled(compiledCacheDirectories: [ownedName])
             TestSupport.expect(store.isInstalled, "Verified local model was not reported as installed")
+            TestSupport.expectEqual(store.installedByteCount(), 9)
 
             let unrelated = store.cacheRoot.appendingPathComponent("keep-me.txt")
             try Data("safe".utf8).write(to: unrelated)
@@ -20,6 +30,14 @@ enum LocalParakeetModelStoreTests {
             TestSupport.expect(
                 FileManager.default.fileExists(atPath: unrelated.path),
                 "Removing the model deleted an unrelated cache file"
+            )
+            TestSupport.expect(
+                !FileManager.default.fileExists(atPath: owned.path),
+                "Removing the model left its recorded compiled cache"
+            )
+            TestSupport.expect(
+                FileManager.default.fileExists(atPath: unrelatedCompiled.path),
+                "Removing the model deleted an unrelated compiled cache"
             )
         }
     }
